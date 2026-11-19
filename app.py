@@ -141,27 +141,27 @@ async def mjpeg_generator() -> AsyncGenerator[bytes, None]:
     boundary = "frame"
     while True:
         try:
-            # Tunggu frame baru dengan timeout 1 detik
-            try:
-                await asyncio.wait_for(new_frame_event.wait(), timeout=1.0)
-            except asyncio.TimeoutError:
-                pass
-
-            frame = latest_frame
-            is_offline = (frame is None or (time.time() - latest_frame_time > 15))
-            if is_offline:
+            # Tunggu frame baru jika kamera aktif
+            if latest_frame is not None and (time.time() - latest_frame_time <= 15):
+                try:
+                    await asyncio.wait_for(new_frame_event.wait(), timeout=0.8)
+                except asyncio.TimeoutError:
+                    pass
+                frame = latest_frame
+                sleep_time = 0.05
+            else:
+                # Mode offline: kirim placeholder setiap 1 detik agar hemat bandwidth
                 frame = placeholder_bytes
+                sleep_time = 1.0
 
-            header = (
-                f"\r\n--{boundary}\r\n"
+            part = (
+                f"--{boundary}\r\n"
                 f"Content-Type: image/jpeg\r\n"
                 f"Content-Length: {len(frame)}\r\n\r\n"
-            ).encode("utf-8")
+            ).encode("utf-8") + frame + b"\r\n"
 
-            yield header + frame + b"\r\n"
-
-            # Batasi framerate max ~20 FPS untuk efisiensi bandwidth
-            await asyncio.sleep(0.05)
+            yield part
+            await asyncio.sleep(sleep_time)
 
         except asyncio.CancelledError:
             break
@@ -183,7 +183,7 @@ async def get_stream():
             "Pragma": "no-cache",
             "Expires": "0",
             "Access-Control-Allow-Origin": "*",
-            "Connection": "close",
+            "X-Accel-Buffering": "no",
         }
     )
 
